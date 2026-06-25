@@ -5,7 +5,7 @@
  * All authenticated requests include the JWT token from localStorage.
  */
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
 // ── Token Management ──────────────────────────────────────────────────────
 
