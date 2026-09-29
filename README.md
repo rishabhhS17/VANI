@@ -15,18 +15,57 @@ command is logged for analytics.
 ## Architecture
 
 ```
-Browser (React SPA)                      API (Fastify)                 Data
-┌───────────────────┐   HTTPS + JWT   ┌────────────────────┐      ┌──────────────┐
-│ Web Speech API    │ ──────────────► │ Routes             │      │ PostgreSQL   │
-│ (speech → text)   │                 │  auth / products / │────► │  (Prisma)    │
-│ React UI          │ ◄────────────── │  cart / orders /   │      │  + full-text │
-└───────────────────┘   JSON action   │  voice             │      │    search    │
-                                       │                    │      └──────────────┘
-                                       │ Hybrid Intent      │      ┌──────────────┐
-                                       │ Parser ───────────►│────► │ Groq LLM     │
-                                       │ (rules → LLM)      │ only │ (fallback)   │
-                                       └────────────────────┘ <0.7 └──────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        BROWSER  (React + Vite SPA)                        │
+│                                                                          │
+│   ┌────────────┐   Web Speech API    ┌──────────────────────────────┐    │
+│   │ Microphone │ ──────────────────► │   Voice Input Component      │    │
+│   └────────────┘   (speech → text)   └───────────────┬──────────────┘    │
+│                                                       │ command text      │
+│   ┌───────────────────────────────────────────────── ▼ ───────────────┐  │
+│   │                     App.tsx  (Single-Page App)                     │  │
+│   │   ProductGrid │ SearchResults │ ProductDetail │ CartDrawer │ Order │  │
+│   └────────────────────────────┬───────────────────────────────────────┘  │
+│                                 │  API Client (client.ts)                  │
+└─────────────────────────────────┼─────────────────────────────────────────┘
+                                  │  HTTPS / REST  (Bearer JWT)
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     API  (Node.js + Fastify + TypeScript)                 │
+│                                                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                 app.ts  →  CORS + { detail } error handler          │ │
+│  └──────┬─────────┬──────────┬───────────┬──────────────┬──────────────┘ │
+│    /auth│ /products│   /cart │  /orders  │   /voice     │                │
+│         ▼         ▼          ▼           ▼              ▼                 │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │        Route handlers  →  Zod validation  →  requireAuth (JWT)      │ │
+│  └────────────────────────────┬───────────────────────────────────────┘ │
+│                                ▼                                          │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                          Service / module layer                     │ │
+│  │  auth (argon2+JWT) │ products (full-text search) │ cart            │ │
+│  │  orders (atomic tx + idempotency) │ intent parser │ dispatcher     │ │
+│  └───────────────┬──────────────────────────────────┬─────────────────┘ │
+│                  │  Prisma ORM                       │ hybrid parse      │
+│                  ▼                                    ▼                   │
+│  ┌───────────────────────────────────┐   rules → (confidence < 0.7)     │
+│  │        PostgreSQL  (Prisma)        │            │                     │
+│  │  users │ products (JSONB) │ carts  │            ▼                     │
+│  │  cart_items │ orders │ order_items │   ┌────────────────────┐         │
+│  │  voice_logs │ tsvector + pg_trgm   │   │   Groq Cloud LLM   │         │
+│  └───────────────────────────────────┘   │  llama-3.1-8b (opt)│         │
+│                                           └────────────────────┘         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Request lifecycle (voice command):** the browser transcribes speech and POSTs the
+text with a Bearer JWT → Fastify validates the body with Zod and authenticates via the
+`requireAuth` guard → the hybrid parser runs the rule tier first and only calls Groq
+when confidence is below 0.7 → the dispatcher routes the parsed intent to the matching
+service (search, cart, order, navigation), which reads or writes through Prisma → a
+structured action plus data is returned as JSON, and the command is logged to
+`voice_logs` for analytics.
 
 - **Layered backend:** routes → services → Prisma. JWT auth guards protected routes.
 - **Data:** relational tables for users/cart/orders; product sub-documents (images,
