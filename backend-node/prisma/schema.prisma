@@ -1,0 +1,121 @@
+// VANI — Postgres schema (Prisma).
+// Mirrors the MongoDB collections; product sub-documents kept as JSONB.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(uuid())
+  name         String
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  cart         Cart?
+  orders       Order[]
+  voiceLogs    VoiceLog[]
+
+  @@map("users")
+}
+
+model Product {
+  id                 String      @id // existing string id from products.json
+  name               String
+  brand              String
+  category           String
+  image              String
+  allImages          Json        @map("all_images") // JSONB: string[]
+  rating             Float
+  reviews            Int
+  price              Float
+  originalPrice      Float?      @map("original_price")
+  about              String      @default("")
+  description        String      @default("")
+  ratingDistribution Json        @map("rating_distribution") // JSONB
+  customerReviews    Json        @map("customer_reviews") // JSONB
+  createdAt          DateTime    @default(now()) @map("created_at") // for sort_by=newest
+  cartItems          CartItem[]
+  orderItems         OrderItem[]
+
+  @@index([category])
+  @@index([brand])
+  @@index([price])
+  @@index([rating])
+  @@map("products")
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique @map("user_id")
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String  @id @default(uuid())
+  cartId    String  @map("cart_id")
+  cart      Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+
+  @@unique([cartId, productId]) // replaces the manual "increment if exists" branch
+  @@index([productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  userId          String      @map("user_id")
+  user            User        @relation(fields: [userId], references: [id])
+  total           Float
+  status          String      @default("confirmed")
+  shippingAddress Json        @map("shipping_address") // JSONB
+  idempotencyKey  String?     @unique @map("idempotency_key")
+  items           OrderItem[]
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String  @map("order_id")
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id])
+  name      String // snapshot at purchase time
+  price     Float // snapshot
+  quantity  Int
+  image     String // snapshot
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model VoiceLog {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  user         User     @relation(fields: [userId], references: [id])
+  command      String
+  intent       String
+  parsedParams Json     @map("parsed_params") // JSONB
+  success      Boolean
+  confidence   Float
+  parserUsed   String   @map("parser_used")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("voice_logs")
+}
